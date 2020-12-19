@@ -1,0 +1,318 @@
+import org.micromanager.MultiStagePosition;
+import java.util.List;
+import org.micromanager.data.Coords;
+import org.micromanager.data.Datastore;
+import org.micromanager.data.Image;
+import org.json.JSONObject;
+import org.json.JSONArray;
+import org.micromanager.data.internal.multipagetiff.StorageMultipageTiff;
+import org.micromanager.AutofocusManager;
+import org.micromanager.Studio;
+
+// parameters for the acquisition
+String[] channels = {"Phase", "RFP", "YFP"};
+Color[] colors = {Color.WHITE, Color.RED, Color.GREEN};
+int[] exposures = {50, 400, 100};
+int ref_channel = 0; // reference channel to use while Definite Focus runs
+int tl_channel = 0; // which one of these channels uses transmitted light?
+boolean start_with_af = true;
+int software_af_interval = 4; //999999999; // 4;
+
+String out_dir = "C:\\Users\\sharad\\AcquisitionData\\Jim\\EXP0202_bmp_spike_membrane\\";
+
+int t_interval = 15 * 60 * 1000; // in milliseconds
+int frames_to_capture = 10000; // 300;
+int channel_delay = 50; // in ms, extra time to wait after telling scope to switch channels
+int tl_to_rl_delay = 1000; // in ms, extra time to wait after telling scope to switch from TL to RL
+
+// software autofocus parameters
+af_Channel = "RFP";
+af_SearchRange = "50"; // in um
+af_Tolerance = "1"; // in um
+af_CropFactor = "1"; // 1 = look at the whole field of view
+af_Exposure = "100"; // in ms
+af_ShowImages = "Yes";
+af_Maximize = "FFTBandpass";
+
+// using FFT we only pay attention to features of a certain spatial frequency.
+// approximate feature sizes and their corresponding cutoffs are noted below. 
+// 5 px = 20%
+// 10 px = 10%
+// 20 px = 5%
+// 50 px = 2%
+af_FFTLowerCutoff = "2"; // in percent 
+af_FFTUpperCutoff = "20"; // in percent 
+
+af_manager = mm.getAutofocusManager();
+af_manager.setAutofocusMethodByName("OughtaFocus");
+af_plugin = af_manager.getAutofocusMethod();
+props = af_plugin.getProperties();
+//mmc.setProperty("OughtaFocus", "OughtaFocus-SearchRange_um", af_SearchRange);
+//mmc.setProperty("OughtaFocus", "OughtaFocus-Tolerance_um", af_Tolerance);
+//mmc.setProperty("OughtaFocus", "OughtaFocus-CropFactor", af_CropFactor);
+//mmc.setProperty("OughtaFocus", "OughtaFocus-Exposure", af_Exposure);
+//mmc.setProperty("OughtaFocus", "OughtaFocus-FFTLowerCutoff(%)", af_FFTLowerCutoff);
+//mmc.setProperty("OughtaFocus", "OughtaFocus-FFTUpperCutoff(%)", af_FFTUpperCutoff);
+//mmc.setProperty("OughtaFocus", "OughtaFocus-ShowImages", af_ShowImages);
+//mmc.setProperty("OughtaFocus", "OughtaFocus-Maximize", af_Maximize);
+//mmc.setProperty("OughtaFocus", "OughtaFocus-Channel", af_Channel);
+mm.core().setAutoFocusDevice("ZeissDefiniteFocus");
+
+// set software autofocus parameters
+//mm.core().setAutoFocusDevice("SimpleAutofocus");
+//mmc.setProperty("SimpleAutofocus", "CoarseStepSize", af_CoarseStepSize);
+//mmc.setProperty("SimpleAutofocus", "CoarseSteps from center", af_CoarseStepNum);
+//mmc.setProperty("SimpleAutofocus", "FineStepSize", af_FineStepSize);
+//mmc.setProperty("SimpleAutofocus", "FineSteps from center", af_FineStepNum);
+//mmc.setProperty("SimpleAutofocus", "CropFactor", af_CropRatio);
+//mmc.setProperty("SimpleAutofocus", "Exposure", af_Exposure);
+//mmc.setProperty("SimpleAutofocus", "Threshold", af_Threshold);
+//mmc.setProperty("SimpleAutofocus", "Channel", af_Channel);
+//af_CoarseStepSize = "3.0";
+//af_CoarseStepNum = "5";
+//af_FineStepSize = "0.4";
+//af_FineStepNum = "5";
+//af_Threshold = "1"; // 1 = capture all images before deciding
+
+String out_basename = "20x_timelapse";
+String out_path = mm.data().getUniqueSaveDirectory(out_dir + out_basename);
+String channelGroup = "Channel";
+
+// create the Datastore objects that will hold all of the frames we capture
+positionList = mm.positions().getPositionList();
+Datastore store = mm.data().createMultipageTIFFDatastore(out_path, false, true);
+Datastore ram_store = mm.data().createRewritableRAMDatastore();
+display = mm.displays().createDisplay(ram_store);
+
+// add the basename to the filename
+oldSummary = store.getSummaryMetadata();
+newSummary = oldSummary.copy().prefix(out_basename).build();
+store.setSummaryMetadata(newSummary);
+
+// let's do this thing
+print("Beginning acquisition...");
+int image_count = 0;
+int frames_since_af = 0;
+boolean do_software_af = false;
+start = System.currentTimeMillis();
+last_printed = 0;
+Coords.CoordsBuilder builder = mm.data().getCoordsBuilder();
+Coords.CoordsBuilder builder2 = mm.data().getCoordsBuilder();
+try {
+	while (image_count < frames_to_capture) {
+		curr_time = System.currentTimeMillis() - start;
+		if (curr_time > image_count * t_interval) {
+			try {
+				display.toFront();
+				display.setCustomTitle("Most recent timepoint (@ " + curr_time / 1000 + " seconds)");
+			}
+			catch (Exception e) {
+				print("Lost the display window...");
+			}
+			
+			frames_since_af++;
+			do_software_af = false;
+			if (frames_since_af >= software_af_interval) {
+				do_software_af = true;
+				frames_since_af = 0;
+			}
+			if ((image_count < 1) && start_with_af) {
+				do_software_af = true;
+				frames_since_af = 0;
+			}
+			
+			print("Taking frame at " + curr_time + " ms");
+			for (ii = 0; ii < positionList.getNumberOfPositions(); ++ii) {
+
+				// turn off live mode, just in case the user 
+				// is still looking at something
+				mm.live().setLiveMode(false);
+			
+				// move to the position
+				position = positionList.getPosition(ii);
+				MultiStagePosition.goToPosition(position, mm.core());
+				mmc.waitForSystem();
+
+				try {
+					// get the Definite Focus offset stored in the position
+					z = position.getZ();
+					print("Imaging at " + position.getLabel()
+					             + ", " + position.getX() 
+			   	   	       + ", " + position.getY() 
+			   		          + ", " + z);
+	
+					// switch back to the reference channel
+			  		mmc.setExposure(exposures[ref_channel]);
+					mmc.setConfig(channelGroup, channels[ref_channel]);
+	     		 	mmc.waitForConfig(channelGroup, channels[ref_channel]);
+	      		mmc.waitForSystem();
+		
+		   		// I have no idea why this combination of steps is necessary, but it seems
+		   		// to work. Briefly, just doing "apply" does nothing except change the 
+		  	 		// ZeissDefiniteFocusOffset setting... you need to then use "Last Position"
+		  			// to actually set the focus
+		  			mm.live().setLiveMode(true);
+		  			mmc.waitForSystem();
+					mmc.setProperty("ZeissDefiniteFocus", "Focus Method", "Apply");
+					mmc.setPosition("ZeissDefiniteFocusOffset", z);
+					mmc.fullFocus();
+					mmc.waitForSystem();
+					mm.core().waitForDevice(mm.core().getAutoFocusDevice());
+					mm.core().waitForDevice(mm.core().getFocusDevice());
+
+					// make sure everything is settled... 
+					// I don't know if this is necessary
+					mmc.waitForSystem();
+					mm.core().waitForDevice(mm.core().getAutoFocusDevice());
+					mm.core().waitForDevice(mm.core().getFocusDevice());
+			
+					mmc.setProperty("ZeissDefiniteFocus", "Focus Method", "Last Position");
+					mmc.setPosition("ZeissDefiniteFocusOffset", z);
+					mmc.fullFocus();
+					mmc.waitForSystem();
+					mm.core().waitForDevice(mm.core().getAutoFocusDevice());
+					mm.core().waitForDevice(mm.core().getFocusDevice());
+					mm.live().setLiveMode(false);
+				}
+				catch (Exception e) {
+					print("Definite Focus failed.");
+					print("Error: " + e);
+				}
+
+				if (do_software_af) {
+					try {
+						// update the Definite Focus position based on a run of the software autofocus
+						print("Doing software autofocus");
+						//mm.core().setAutoFocusDevice("SimpleAutofocus");
+						//mmc.fullFocus();
+						mm.live().setLiveMode(true);
+						mm.live().setLiveMode(false);
+						mmc.setConfig(channelGroup, af_Channel);
+	      			mmc.waitForConfig(channelGroup, af_Channel);
+	      			mmc.waitForSystem();
+	      			af_manager.setAutofocusMethodByName("OughtaFocus");
+	      			af_plugin = af_manager.getAutofocusMethod();
+						props = af_plugin.getProperties();
+						//print(props);
+						af_plugin.fullFocus();
+						mm.core().setAutoFocusDevice("ZeissDefiniteFocus");
+						mmc.setProperty("ZeissDefiniteFocus", "Focus Method", "Measure");
+						mmc.fullFocus();
+						mmc.waitForSystem();
+						new_z = mmc.getPosition("ZeissDefiniteFocusOffset");
+					
+						debug_old_pos = positionList.getPosition(ii);
+						print(debug_old_pos.getX() + ", " + debug_old_pos.getY() + ", " + debug_old_pos.getZ());
+						print(debug_old_pos.getLabel());
+						new_position = new MultiStagePosition("XYStage", 
+													      			  position.getX(), 
+																	     position.getY(),
+																	     "ZeissDefiniteFocusOffset",
+																	     new_z);
+						new_position.setLabel(debug_old_pos.getLabel());
+						positionList.replacePosition(ii, new_position);
+				
+						debug_new_pos = positionList.getPosition(ii);
+						print(debug_new_pos.getX() + ", " + debug_new_pos.getY() + ", " + debug_new_pos.getZ());
+					}
+					catch (Exception e) {
+						print("Setting new definite focus position failed.");
+						print("Error: " + e);
+					}
+				}
+				
+			
+				// capture each channel
+				//print("Taking image at ZeissDefiniteFocusOffset " 
+				//       + mmc.getPosition("ZeissDefiniteFocusOffset"));
+				
+				for (jj = 0; jj < channels.length; jj++) {
+
+					// make sure everything is settled... 
+					// I don't know if this is necessary
+					mmc.waitForSystem();
+					mm.core().waitForDevice(mm.core().getAutoFocusDevice());
+					mm.core().waitForDevice(mm.core().getFocusDevice());
+					
+					// change to the next channel
+					mmc.setExposure(exposures[jj]);
+					mmc.setConfig(channelGroup, channels[jj]);
+	      		mmc.waitForConfig(channelGroup, channels[jj]);
+	      		mmc.waitForSystem();
+
+	      		// make sure everything is settled... 
+					// I don't know if this is necessary
+					mmc.waitForSystem();
+					mm.core().waitForDevice(mm.core().getAutoFocusDevice());
+					mm.core().waitForDevice(mm.core().getFocusDevice());
+
+	      		// add in additional time for channel switching. 
+	      		// this seems to cut down on messed up images.
+	      		if (jj > 0) {
+	      			if (jj-1 == tl_channel) {
+	      				Thread.sleep(tl_to_rl_delay);
+	      			}
+	      			else {
+	      				Thread.sleep(channel_delay);
+	      			}
+	      		}
+	      		else if (jj == 0) {
+	      			if (ref_channel == tl_channel) {
+	      				Thread.sleep(tl_to_rl_delay);
+	      			}
+	      			else {
+	      				Thread.sleep(channel_delay);
+	      			}
+	      		}
+
+	      		// make sure everything is settled... 
+					// I don't know if this is necessary
+					mmc.waitForSystem();
+					mm.core().waitForDevice(mm.core().getAutoFocusDevice());
+					mm.core().waitForDevice(mm.core().getFocusDevice());
+
+	      		// do the actual image capture
+					//print("  Capturing channel " + jj + ": " 
+					//                           + channels[jj] + " @ " 
+					//                           + exposures[jj] + " ms");
+					List images = mm.live().snap(false);
+					Image image = images.get(0);
+
+					// add the image to the Datastore that automatically saves to disk
+					builder = builder.stagePosition(ii).time(image_count).channel(jj);
+					image = image.copyAtCoords(builder.build());
+					//print(builder.build());
+					//print(image);
+					store.putImage(image);
+
+					// show the most recent set of images in a Datastore that lives in RAM
+					builder2 = builder2.stagePosition(ii).time(0).channel(jj);
+					image = image.copyAtCoords(builder2.build());
+					ram_store.putImage(image);
+				}
+			
+			}
+			image_count++;
+		}
+		else {
+			// print our current status every 15s
+			if (curr_time - last_printed > 15000) {
+				print("Sleeping at " + ( curr_time / 60000.0 ) + " min, next at " + 
+				     ( image_count * t_interval / 60000.0 ) + " min, " + frames_since_af + " frames since AF.");
+				last_printed = curr_time;
+			}
+			
+			// hang out for another 100 ms
+			Thread.sleep(100);
+		}
+	}
+}
+catch (Exception e) {
+	print("Error: " + e);
+}
+finally {
+	// file cleanup tasks
+	store.freeze();
+	store.close();
+}
+print("Done.");
